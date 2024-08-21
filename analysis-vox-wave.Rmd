@@ -1,0 +1,354 @@
+---
+title: '**Appendix C:** Data, documentation and analysis scripts for *Accuracy Assessment of Two Electromagnetic  Articulographs:
+  NDI WAVE and NDI VOX*'
+author: '*Teja Rebernik (t.rebernik@rug.nl), Jidde Jacobi, Mark Tiede, Martijn Wieling*'
+date: "Generated on `r format (Sys.time(), '%x %X')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 2
+    code_folding: show
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+# Abstract
+
+**Purpose**: This study compares two electromagnetic articulographs (EMA) manufactured by Northern Digital, Inc.: the NDI Wave System (2008) and the NDI Vox-EMA System (2020).
+
+**Method**: Four experiments were completed: (a) comparison of statically positioned sensors; (b) tracking dynamic movements of sensors manipulated using a motor-driven LEGO apparatus; (c) tracking small and large movements of sensors mounted in a rigid bar manipulated by hand; and (d) tracking movements of sensors rotated on a circular disc. We assessed spatial variability for statically positioned sensors, variability in the transduced Euclidean distances (EDs) between sensor pairs, and missing data rates. For sensors tracking circular movements, we compared the fit between fitted ideal circles and actual trajectories.
+
+**Results**: The average sensor pair tracking error (i.e., the standard deviation of the EDs) was 1.37 mm for the WAVE and 0.12 mm for the VOX during automated trials at the fastest speed, and 0.35 mm for the WAVE and 0.14 mm for the VOX during the tracking of large manual movements. The average standard deviation of the fitted circle radii charted by manual circular disc movements was 0.72 mm for the WAVE sensors and 0.14 mm for the VOX sensors. There was no significant difference between the WAVE and the VOX in the number of missing frames.
+
+**Conclusions**: In general, the VOX system significantly outperformed the WAVE on measures of both static precision and dynamic accuracy (automated and manual). For both systems, positional precision and spatial variability were influenced by the sensors’ position relative to the field generator unit (FGU; worse when further away).
+
+# Libraries and functions
+
+```{r}
+# load required packages
+library(mgcv)
+packageVersion("mgcv")
+
+library(itsadug)
+packageVersion("itsadug")
+
+library(beanplot)
+packageVersion("beanplot")
+
+# R version information
+R.version.string
+```
+
+# Static trials
+
+## Dataset
+```{r}
+tab2 <- read.csv("static-coordinates.csv")
+
+tab2$articulograph = as.factor(tab2$articulograph)
+tab2$position = as.factor(tab2$position)
+tab2$trial = as.factor(tab2$trial)
+tab2$sensorpos = as.factor(tab2$sensor)
+tab2$sensorset = (tab2$trial %in% c('t1','t2'))
+tab2$sensorset = paste(tab2$sensorpos,tab2$sensorset,sep='')
+tab2$sensorset = as.factor(tab2$sensorset)
+
+tab2$sensor = interaction(tab2$articulograph,tab2$sensorpos)
+tab2$coordinate = as.factor(tab2$coordinate)
+levels(tab2$coordinate) = c('Pitch', 'X','Y','Z','Yaw')
+tab2 = droplevels(tab2[tab2$position != 'p16',]) # remove p16 as it was not used in our data analysis
+```
+
+```{r}
+str(tab2)
+head(tab2)
+```
+## Trial variability
+
+We compared the four trials to see if there is a difference between them. All trials show similar patterns, which led us to averaging our results in the tables found in the paper.
+
+```{r}
+# there is no differential effect of trial
+summary(m<-gam(SD+1e-04 ~ trial*articulograph+ s(sensorset,articulograph,bs='re'), data = tab2[tab2$coordinate %in% c('X','Y','Z','Pitch','Yaw'),],method='REML',family=Gamma(link=log))) 
+```
+
+Which is also clear from the visualization: 
+
+```{r}
+par(mfrow=c(2,2)) # note that for the visualization a small value is added as taking the logarithm of 0 is not possible
+beanplot(log(SD+1e-04)~articulograph,data=tab2[tab2$trial=='t1',],bw='bcv',ylab='SD (log-scale)',log='',method='jitter',main='Trial 1',ylim=c(-10,6))
+beanplot(log(SD+1e-04)~articulograph,data=tab2[tab2$trial=='t2',],bw='bcv',ylab='SD (log-scale)',log='',method='jitter',main='Trial 2',ylim=c(-10,6))
+beanplot(log(SD+1e-04)~articulograph,data=tab2[tab2$trial=='t3',],bw='bcv',ylab='SD (log-scale)',log='',method='jitter',main='Trial 3',ylim=c(-10,6))
+beanplot(log(SD+1e-04)~articulograph,data=tab2[tab2$trial=='t4',],bw='bcv',ylab='SD (log-scale)',log='',method='jitter',main='Trial 4',ylim=c(-10,6))
+```
+
+## Static precision comparison
+
+This part assesses the static precision of the WAVE and the VOX. It corresponds to Table 2 and Figure 10 in the paper.
+
+### GAM model
+
+We assessed the static precision of the VOX and the WAVE. The VOX was significantly better (p < 0.001)
+
+```{r}
+# Gamma model due to non-Gaussian distribution of residuals (due to large outliers of Wave)
+summary(m<-gam(SD+1e-04 ~ articulograph+ s(sensorset,articulograph,bs='re'), data = tab2[tab2$coordinate %in% c('X','Y','Z','Pitch','Yaw'),],method='REML',family=Gamma(link=log))) 
+```
+
+```{r}
+# Quantification of the effect on the measurement scale
+summary(m<-gam(SD ~ articulograph + s(sensorset,articulograph,bs='re'), data = tab2[tab2$coordinate %in% c('X','Y','Z','Pitch','Yaw')&tab2$SD < 100,],method='REML')) 
+```
+
+### Visualization
+
+```{r}
+# Figure 10 in paper
+par(mfrow=c(1,1)) 
+beanplot(log(SD+1e-04)~articulograph,data=tab2[tab2$coordinate %in% c('X','Y','Z','Pitch','Yaw'),],bw='bcv',main='',ylab='SD (log-scale)',log='',method='jitter')
+```
+
+## Effect of FGU distance
+
+This part assesses the effect of actual distance from FGU (along the z-axis) on the SDs.
+
+```{r}
+# Defining the distance from the FGU for each position (movement along the z-axis)
+tab2$distance = NA
+tab2[tab2$position=='p1',]$distance = 9
+tab2[tab2$position=='p2',]$distance = 13
+tab2[tab2$position=='p3',]$distance = 17.8
+tab2[tab2$position=='p4',]$distance = 22.6
+tab2[tab2$position=='p5',]$distance = 27.4
+tab2[tab2$position=='p6',]$distance = 33.8
+tab2p = droplevels(tab2[tab2$position %in% c('p1','p2','p3','p4','p5','p6'),])
+```
+
+### GAM model
+
+We assessed the effect of distance on the static precision. Both articulographs were less accurate when sensors were further away from the FGU.
+
+```{r}
+summary(m<-bam(SD+1e-4 ~ s(distance,by=articulograph,k=6) + articulograph + s(distance,sensorset,by=articulograph, bs='fs',m=1,k=6), data = tab2p,method='fREML',family=Gamma(link=log), discrete=T)) 
+```
+
+### GAM model: WAVE vs. VOX
+
+We additionally assessed statistically whether the WAVE is more affected by distance than the VOX. The results show the WAVE is affected more than the VOX (significantly). This is visualized in Figure 11 in the paper. 
+
+```{r}
+tab2p$articulographO = as.ordered(tab2p$articulograph)
+contrasts(tab2p$articulographO) = 'contr.treatment'
+
+summary(m<-bam(SD+1e-4 ~ s(distance,k=6) + s(distance,by=articulographO,k=6) + articulographO + s(distance,sensorset,by=articulograph, bs='fs',m=1,k=6), data = tab2p,method='fREML',family=Gamma(link=log), discrete=T))
+
+# As s(distance):articulographOWAVE has 1 edf, it is linear, so we fit a linear interaction directly to assess the direction of the effect
+summary(m<-gam(SD+1e-4 ~ articulograph*distance + s(sensorset,articulograph,bs='re') + s(sensorset,distance,bs='re'), data = tab2p,method='REML',family=Gamma(link=log))) 
+```
+
+### Visualization
+
+```{r}
+# Figure 11 in paper
+tab2p = droplevels(tab2[tab2$position %in% c('p1','p2','p3','p4','p5','p6'),])
+levels(tab2p$position) = c('1','2','3','4','5','6')
+
+summary(m<-bam(SD+1e-4 ~ s(distance,by=articulograph,k=6) + articulograph + s(distance,sensorset,by=articulograph, bs='fs',m=1,k=6), data = tab2p,method='fREML',family=Gamma(link=log), discrete=T))
+
+par(mfrow=c(1,3))
+plot_smooth(m,view='distance',plot_all='articulograph', shade=T,ylab='SD (log-scale)',xlab='Distance from FGU',rug=F, col=c('black','darkgray'), rm.ranef=T)
+beanplot(log(SD+1e-04)~position,data=tab2p[tab2p$articulograph=='VOX',],bw='bcv',ylab='SD (log-scale)',log='',method='jitter',main='VOX',ylim=c(-10,2),xlab='Position')
+beanplot(log(SD+1e-04)~position,data=tab2p[tab2p$articulograph=='WAVE',],bw='bcv',ylab='SD (log-scale)',log='',method='jitter',main='WAVE',ylim=c(-10,2),xlab='Position')
+```
+
+## Distance measurements
+
+This part assesses the error between the actual (hand-measured) distance and the distance determined using the reported sensor coordinates. It corresponds to Table 3 and Figure 12 in the paper. The VOX and the WAVE do not significantly differ regarding the inferred distances (p = 0.5)
+
+### Dataset
+```{r}
+tab3 <- read.csv("distance-measures.csv")
+tab3$articulograph = as.factor(tab3$articulograph)
+tab3$trial = as.factor(tab3$trial)
+tab3$sensor = as.factor(tab3$sensor)
+tab3$sensorSet = as.factor(tab3$sensorSet)
+tab3$sens = interaction(tab3$sensor,tab3$sensorSet)
+tab3$positionPair = as.factor(tab3$positionPair)
+```
+
+```{r}
+str(tab3)
+head(tab3)
+```
+
+### GAM model
+```{r}
+# Gamma-distributed model with log-link: not significant
+summary(m<-gam(error ~ articulograph + s(sens,articulograph,bs='re') + s(positionPair,articulograph,bs='re'), data = tab3,method='REML',family=Gamma(link=log)))
+```
+
+```{r}
+# Gaussian model (using the original measurement scale): also not significant
+summary(m<-gam(error ~ articulograph + s(sens,articulograph,bs='re') + s(positionPair,articulograph,bs='re'), data = tab3,method='REML')) 
+```
+
+### Visualization
+
+```{r}
+# Figure 12 in paper
+
+par(mfrow=c(1,2)); beanplot(log(error)~articulograph,data=tab3,bw='bcv',main='',ylab='error (log-scale)',log='')
+beanplot(error~articulograph,data=tab3,bw='bcv',main='',ylab='error (mm)',log='')
+```
+
+# Dynamic trials
+
+This part assesses dynamic accuracy during automated dynamic trials. It corresponds to Table 4 and Figures 17 and 18 in the paper.
+
+## Dataset
+
+```{r}
+datAut <- read.csv("vox-wave-automatic.csv")
+
+datAut$articulograph <- as.factor(datAut$articulograph)
+levels(datAut$articulograph) = c('VOX','WAVE') # capitalize levels
+datAut$rigidBody <- as.factor(datAut$rigidBody)
+datAut$trial <- as.factor(datAut$trial)
+datAut$sensorSet <- as.factor(datAut$sensorSet)
+```
+
+```{r}
+str(datAut)
+head(datAut)
+```
+
+## GAM model
+
+Here we assess the articulographs' accuracy during dynamic trials. Only automated data is used, as the manual dynamic movements are likely not consistent across trials and articulographs. The circularly rotating bar showed the largest standard deviations.
+
+```{r}
+summary(gam(SD ~ articulograph + s(rigidBody,articulograph,bs='re'), data = datAut,family=Gamma(link=log), method='REML'))
+```
+
+```{r}
+# Quantification of the effect on the measurement scale: non-circle
+summary(gam(SD ~ articulograph + s(rigidBody,articulograph,bs='re'), data = datAut[datAut$rigidBody != 'circle',], method='REML')) # normal scale: 0.1 mm difference
+```
+
+
+```{r}
+# Quantification of the effect on the measurement scale: circle
+summary(gam(SD ~ articulograph, data = datAut[datAut$rigidBody == 'circle',], method='REML')) # normal scale for the circle: 3.4 mm difference
+```
+
+
+```{r}
+# Figure 17 in paper 
+par(mfrow=c(2,3))
+beanplot(log(SD)~articulograph,data=droplevels(datAut),bw='bcv',main='All rigid bodies',ylab='SD (log-scale)',log='',method='jitter',ylim=c(-7,3.5))
+beanplot(log(SD)~articulograph,data=droplevels(datAut[datAut$rigidBody=='static',]),bw='bcv',main='Static',ylab='SD (log-scale)',ylim=c(-7,3.5),method='jitter',log='')
+beanplot(log(SD)~articulograph,data=droplevels(datAut[datAut$rigidBody=='eccentricSmall',]),bw='bcv',main='Eccentric (small)',ylab='SD (log-scale)',ylim=c(-7,3.5),method='jitter',log='')
+beanplot(log(SD)~articulograph,data=droplevels(datAut[datAut$rigidBody=='eccentricLarge',]),bw='bcv',main='Eccentric (large)',ylab='SD (log-scale)',ylim=c(-7,3.5),method='jitter',log='')
+beanplot(log(SD)~articulograph,data=droplevels(datAut[datAut$rigidBody=='piston',]),bw='bcv',main='Piston',ylab='SD (log-scale)',ylim=c(-7,3.5),method='jitter',log='')
+beanplot(log(SD)~articulograph,data=droplevels(datAut[datAut$rigidBody=='circle',]),bw='bcv',main='Circle',ylab='SD (log-scale)',ylim=c(-7,3.5),method='jitter',log='')
+```
+
+## Effect of speed on accuracy
+
+### GAM model
+
+```{r}
+summary(m<-gam(SD ~  s(speed,by=articulograph,k=4) + articulograph + s(speed,rigidBody,by=articulograph,bs='fs',m=1,k=4), data = datAut,family=Gamma(link=log), method='REML'))
+```
+
+### Visualization
+
+```{r}
+# Figure 18 in paper
+par(mfrow=c(1,3))
+plot_smooth(m,view='speed',plot_all='articulograph', shade=T,ylab='SD (log-scale)',xlab='Movement speed',rug=F, col=c('black','darkgray'), rm.ranef=T)
+beanplot(log(SD)~speed,data=droplevels(datAut[datAut$articulograph=='VOX',]),bw='bcv',main='VOX',log="",ylab='SD (log-scale)',xlab='Speed',ylim=c(-8,4),method='jitter')
+beanplot(log(SD)~speed,data=droplevels(datAut[datAut$articulograph=='WAVE',]),bw='bcv',main='WAVE',log="",ylab='SD (log-scale)',xlab='Speed',ylim=c(-8,4),method='jitter')
+```
+
+### GAM model: WAVE vs. VOX
+
+```{r}
+datAut$articulographO = as.ordered(datAut$articulograph)
+contrasts(datAut$articulographO) = 'contr.treatment'
+```
+
+```{r}
+summary(m<-gam(SD ~ s(speed,k=4) + s(speed, by=articulographO,k=4) + articulographO + s(speed,rigidBody,by=articulograph,bs='fs',m=1,k=4), data = datAut[datAut$rigidBody!='circle',], method='REML', family=Gamma(link=log))) #when log-transformed, WAVE is not significantly worse than VOX at faster speeds (p = 0.9)
+```
+
+```{r, eval=F, echo=F}
+# Note that at the original measurement scale, the WAVE is significantly worse than the VOX at faster speeds (p = 0.01), but due to the distribution of residuals, the Gamma model is preferred
+summary(m<-gam(SD ~ s(speed,k=4) + s(speed, by=articulographO,k=4) + articulographO + s(speed,rigidBody,by=articulograph,bs='fs',m=1,k=4), data = datAut[datAut$rigidBody!='circle',], method='REML')) #when non-log-transformed, WAVE is significantly worse than VOX at faster speeds (p = 0.01)
+
+# Show residuals: non normal and heteroscedastic
+qqnorm(resid(m))
+qqline(resid(m))
+plot(fitted(m),resid(m))
+```
+
+# Missing data
+
+This part assesses missing data using logistic regression. It corresponds to Table 5 and Figure 19 in the paper.
+
+## Dataset
+
+```{r}
+mis <- read.csv("missing-data.csv")
+mis$articulograph = as.factor(mis$articulograph)
+mis$trial = as.factor(mis$trial)
+mis$sensorSet = as.factor(mis$sensorSet)
+mis$dynamicTask = as.factor(mis$dynamicTask)
+mis$sensor = as.factor(mis$sensor)
+mis$sens = interaction(mis$sensor,mis$sensorSet)
+
+mis$missingFrames = round(8000 * mis$missing / 100)
+mis$nonMissingFrames = 8000 - mis$missingFrames
+```
+
+```{r}
+str(mis)
+head(mis)
+```
+
+## GAM model: WAVE vs. VOX
+
+```{r}
+summary(m<-gam(cbind(missingFrames,nonMissingFrames) ~  articulograph + s(sens,articulograph,bs='re'), data = mis,family=binomial, method='REML'))
+```
+
+### Visualization
+
+```{r}
+# Figure 19 in paper
+par(mfrow=c(1,1))
+beanplot(missing~articulograph,data=mis,bw='bcv',log="",ylab='Missing (%)', cutmin = 0)
+```
+
+### Effect of test type
+
+```{r}
+# Assessing whether 'type' (manual vs. automated) plays a role
+mis$type = 'Manual'
+mis[mis$dynamicTask %in% c('automatedFast', 'automatedMedium','automatedSlow'),]$type = 'Automatic'
+mis$type = as.factor(mis$type)
+mis$type = relevel(mis$type,'Manual')
+```
+
+```{r}
+summary(m<-gam(cbind(missingFrames,nonMissingFrames) ~  articulograph*type + s(sens,articulograph,bs='re'), data = mis,family=binomial, method='REML'))
+```
